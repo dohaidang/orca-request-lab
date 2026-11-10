@@ -168,6 +168,8 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 .network-note span { color: var(--muted); font: 750 8px Iosevka, "JetBrains Mono", monospace; letter-spacing: .12em; }
 .network-note code { color: var(--amber); font: 9px Iosevka, "JetBrains Mono", monospace; }
 .drawer-secondary { width: 100%; margin-top: 8px; }
+.bundle-import-label { margin-top: 20px; }
+.bundle-input { min-height: 140px; resize: vertical; white-space: pre; }
 .history-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .history-head .drawer-lead { margin-bottom: 12px; }
 .history-list { display: grid; gap: 6px; }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildGraphqlRequest, exportRunReport, importOpenApi } from './integration-tools.js'
+import { buildGraphqlRequest, createWorkspaceBundle, exportRunReport, importOpenApi, parseWorkspaceBundle } from './integration-tools.js'
 
 test('imports OpenAPI operations as HTTP requests', () => {
   const source = JSON.stringify({
@@ -30,4 +30,12 @@ test('builds a GraphQL HTTP request', () => {
   assert.match(output, /# @name ReadUser/)
   assert.match(output, /POST https:\/\/api\.example\.com\/graphql/)
   assert.match(output, /"id": "7"/)
+})
+
+test('exports portable workspace bundles without values by default', () => {
+  const encoded = createWorkspaceBundle({ source: 'GET https://example.com', environments: [{ name: 'Dev', variables: [{ key: 'token', value: 'secret' }] }], createdAt: 0 })
+  assert.doesNotMatch(encoded, /secret/)
+  const parsed = parseWorkspaceBundle(encoded)
+  assert.equal(parsed.source, 'GET https://example.com')
+  assert.deepEqual(parsed.environments[0].variables, [{ key: 'token', value: '' }])
 })

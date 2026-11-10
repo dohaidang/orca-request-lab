@@ -152,6 +152,24 @@ export function generateCode(request, language) {
   return `const response = await fetch(${JSON.stringify(request.url)}, ${JSON.stringify(options, null, 2)})\n\nconsole.log(response.status)\nconsole.log(await response.text())`
 }
 
+export function redactHistoryRequest(request, { includeBody = false } = {}) {
+  const sensitiveHeader = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key)$/i
+  let url = request.url
+  try {
+    const target = new URL(url)
+    for (const key of target.searchParams.keys()) {
+      if (/(token|key|secret|password|auth)/i.test(key)) target.searchParams.set(key, '[REDACTED]')
+    }
+    url = target.toString()
+  } catch { /* retain template URLs containing unresolved variables */ }
+  return {
+    ...request,
+    url,
+    headers: request.headers.map(header => ({ ...header, value: sensitiveHeader.test(header.name) ? '[REDACTED]' : header.value })),
+    body: includeBody ? request.body : ''
+  }
+}
+
 export function getJsonPath(value, path) {
   if (path === '$') return value
   if (!path.startsWith('$.') && !path.startsWith('$[')) throw new Error(`Invalid JSON path: ${path}`)

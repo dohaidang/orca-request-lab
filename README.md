@@ -26,6 +26,9 @@ Request Lab is a focused HTTP workbench for Orca IDE. It reads `.http` and `.res
 - OAuth 2.0 Client Credentials with encrypted secrets and in-memory token caching.
 - GraphQL-over-HTTP request builder with JSON variables.
 - Per-request timeout, retry, and cookie directives.
+- Privacy-first request history with automatic credential redaction.
+- Portable workspace bundle import and export.
+- Dependency-free continuous integration and repository checks.
 - No telemetry and no intermediary request service.
 
 ## Requirements
@@ -161,6 +164,17 @@ After running a collection, open **Results** and export either:
 
 Reports contain request names, status codes, timing, assertions, captures, and summary counts. They do not contain encrypted authentication credentials.
 
+## Privacy controls
+
+Open **Privacy** to control local history and workspace portability:
+
+- Sensitive headers such as `Authorization`, `Cookie`, and common API key headers are always redacted from history.
+- Credential-like URL parameters containing `token`, `key`, `secret`, `password`, or `auth` are redacted.
+- Request bodies are not stored in history by default. They can be enabled explicitly when replay fidelity is more important than local data minimization.
+- Workspace bundles contain requests and environment structure in one JSON file.
+- Environment values are excluded from bundles by default and authentication secrets are never exported.
+- Imported workspaces are appended instead of replacing the current editor contents.
+
 ## Limits and privacy
 
 Response bodies are capped at 768 KB to keep the editor responsive. Request Lab does not collect telemetry. URLs, headers, and bodies are used only to send requests to the destination you specify. Environment configuration and request history remain in Orca's plugin-local storage.
@@ -168,9 +182,15 @@ Response bodies are capped at 768 KB to keep the editor responsive. Request Lab 
 ## Testing
 
 ```shell
+node --version
+npm run verify
 orca plugin check .
 orca plugin test .
 ```
+
+`npm run verify` runs dependency-free repository checks and browser-side tests. `orca plugin test .` also exercises the trusted worker, local HTTP transport, cookies, retries, and OAuth token caching.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [CHANGELOG.md](CHANGELOG.md) for project policies and version history.
 
 ## License
 

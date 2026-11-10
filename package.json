@@ -1,0 +1,14 @@
+{
+  "name": "orca-request-lab",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test ui/http-parser.test.js ui/request-tools.test.js ui/integration-tools.test.js",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

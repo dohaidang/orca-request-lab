@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyAuth, evaluateAssertions, extractCaptures, generateCode, getJsonPath, parseCurl, resolveRequest, resolveVariables } from './request-tools.js'
+import { applyAuth, evaluateAssertions, extractCaptures, generateCode, getJsonPath, parseCurl, redactHistoryRequest, resolveRequest, resolveVariables } from './request-tools.js'
 
 test('resolves environment and dynamic variables', () => {
   const result = resolveVariables('{{baseUrl}}/items/{{$timestamp}}', { baseUrl: 'https://api.example.com' }, { timestamp: 42, randomUUID: 'id' })
@@ -52,4 +52,12 @@ test('generates cURL, JavaScript, and Python snippets', () => {
   assert.match(generateCode(request, 'curl'), /curl -X POST/)
   assert.match(generateCode(request, 'javascript'), /await fetch/)
   assert.match(generateCode(request, 'python'), /requests\.request/)
+})
+
+test('redacts sensitive history data and omits bodies by default', () => {
+  const result = redactHistoryRequest({ url: 'https://example.com?api_key=secret&view=full', headers: [{ name: 'Authorization', value: 'Bearer secret' }, { name: 'Accept', value: 'application/json' }], body: '{"password":"secret"}' })
+  assert.match(result.url, /api_key=%5BREDACTED%5D/)
+  assert.equal(result.headers[0].value, '[REDACTED]')
+  assert.equal(result.headers[1].value, 'application/json')
+  assert.equal(result.body, '')
 })

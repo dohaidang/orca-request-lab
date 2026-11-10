@@ -1,6 +1,6 @@
 import { formatBody, parseRequests } from './http-parser.js'
-import { applyAuth, evaluateAssertions, extractCaptures, generateCode, parseCurl, resolveRequest } from './request-tools.js'
-import { buildGraphqlRequest, exportRunReport, importOpenApi } from './integration-tools.js'
+import { applyAuth, evaluateAssertions, extractCaptures, generateCode, parseCurl, redactHistoryRequest, resolveRequest } from './request-tools.js'
+import { buildGraphqlRequest, createWorkspaceBundle, exportRunReport, importOpenApi, parseWorkspaceBundle } from './integration-tools.js'
 
 const isEditor = document.documentElement.dataset.mode === 'editor'
 const sample = `# @name Read a sample post
@@ -40,7 +40,7 @@ const state = {
   runResults: [],
   collectionRunning: false,
   collectionAbort: false,
-  preferences: { cookieJar: true, maxRetries: 1 },
+  preferences: { cookieJar: true, maxRetries: 1, historyBodies: false },
   cookieCount: 0,
   drawer: ''
 }
@@ -60,6 +60,7 @@ app.innerHTML = `
         <button class="tool-button" data-drawer="graphql" type="button">GraphQL</button>
         <button class="tool-button" data-drawer="code" type="button">Generate code</button>
         <button class="tool-button" data-drawer="network" type="button"><span id="network-indicator" class="tool-dot"></span>Network</button>
+        <button class="tool-button" data-drawer="privacy" type="button">Privacy</button>
         <button id="run-all" class="button run-all" type="button"><span>▶▶</span> Run all</button>
         <button class="tool-button" data-drawer="results" type="button">Results <span id="results-count" class="count-badge">0</span></button>
         <label class="timeout-label">Timeout <input id="timeout" type="number" min="1" max="300" value="30" aria-label="Timeout in seconds"><span>s</span></label>
@@ -356,14 +357,15 @@ function renderTestReport(tests, captures) {
 }
 
 async function recordHistory(request, response) {
+  const safeRequest = redactHistoryRequest(request, { includeBody: state.preferences.historyBodies })
   const entry = {
     id: crypto.randomUUID(),
     time: Date.now(),
     name: request.name,
     method: request.method,
-    url: request.url,
-    headers: request.headers,
-    body: request.body,
+    url: safeRequest.url,
+    headers: safeRequest.headers,
+    body: safeRequest.body,
     status: response.ok ? response.status : 0,
     elapsedMs: response.ok ? response.elapsedMs : null
   }
@@ -398,6 +400,7 @@ function renderDrawer() {
   else if (state.drawer === 'openapi') renderOpenApiDrawer()
   else if (state.drawer === 'network') renderNetworkDrawer()
   else if (state.drawer === 'graphql') renderGraphqlDrawer()
+  else if (state.drawer === 'privacy') renderPrivacyDrawer()
 }
 
 function renderEnvironmentDrawer() {
@@ -647,6 +650,51 @@ function renderNetworkIndicator() {
   elements.networkIndicator.title = `${state.cookieCount} cookies · ${state.preferences.maxRetries} retries`
 }
 
+function renderPrivacyDrawer() {
+  elements.drawerTitle.textContent = 'Privacy & portability'
+  elements.drawerContent.innerHTML = `
+    <p class="drawer-lead">Sensitive headers and credential-like query parameters are always redacted from history. Request bodies are excluded unless you opt in.</p>
+    <label class="switch-row"><span><strong>Store request bodies in history</strong><small>May contain personal or secret data</small></span><input id="history-bodies" type="checkbox" ${state.preferences.historyBodies ? 'checked' : ''}></label>
+    <button id="privacy-save" class="button primary drawer-primary" type="button">Save privacy setting</button>
+    <div class="section-label"><span>WORKSPACE BUNDLE</span></div>
+    <p class="drawer-lead">Export requests and environment structure as one portable JSON file. Authentication secrets are never included.</p>
+    <label class="switch-row"><span><strong>Include environment values</strong><small>Off by default; values may be sensitive</small></span><input id="bundle-values" type="checkbox"></label>
+    <button id="bundle-export" class="button drawer-primary" type="button">Export workspace bundle</button>
+    <label class="form-label bundle-import-label">Import bundle JSON<textarea id="bundle-input" class="field bundle-input" spellcheck="false" placeholder="Paste a request-lab-workspace JSON bundle"></textarea></label>
+    <button id="bundle-import" class="button drawer-primary" type="button">Append imported workspace</button>`
+  document.querySelector('#privacy-save').addEventListener('click', async () => {
+    state.preferences.historyBodies = document.querySelector('#history-bodies').checked
+    await orca.storage.set('preferences', state.preferences)
+    showToast('Privacy setting saved.')
+  })
+  document.querySelector('#bundle-export').addEventListener('click', exportWorkspaceBundle)
+  document.querySelector('#bundle-import').addEventListener('click', importWorkspaceBundle)
+}
+
+async function exportWorkspaceBundle() {
+  if (!orca.files) { showToast('File export is unavailable in this Orca surface.'); return }
+  const includeValues = document.querySelector('#bundle-values').checked
+  const data = createWorkspaceBundle({ source: elements.source.value, environments: state.environments, includeValues })
+  const result = await orca.files.saveAs({ suggestedName: 'request-lab-workspace.json', mimeType: 'application/json', data })
+  if (result.status === 'saved') showToast(`Workspace exported${includeValues ? ' with environment values' : ' without environment values'}.`)
+}
+
+async function importWorkspaceBundle() {
+  try {
+    const bundle = parseWorkspaceBundle(document.querySelector('#bundle-input').value)
+    if (bundle.source.trim()) {
+      elements.source.value = `${elements.source.value.trim()}\n\n### Imported workspace\n${bundle.source.trim()}`
+      elements.source.dispatchEvent(new Event('input'))
+    }
+    const imported = bundle.environments.map(environment => ({ ...environment, id: crypto.randomUUID(), name: `${environment.name} (imported)` }))
+    state.environments.push(...imported)
+    await persistEnvironments()
+    renderEnvironmentSelect()
+    closeDrawer()
+    showToast(`Imported ${bundle.environments.length} environment${bundle.environments.length === 1 ? '' : 's'} and ${parseRequests(bundle.source).length} request${parseRequests(bundle.source).length === 1 ? '' : 's'}.`)
+  } catch (error) { showToast(error instanceof Error ? error.message : 'Workspace import failed.') }
+}
+
 function renderCodeDrawer() {
   elements.drawerTitle.textContent = 'Generate code'
   const template = state.requests[state.selected]
@@ -763,9 +811,12 @@ async function loadPersistedState() {
     if (Array.isArray(environments) && environments.length) state.environments = environments
     if (typeof activeId === 'string' && state.environments.some(item => item.id === activeId)) state.activeEnvironmentId = activeId
     else state.activeEnvironmentId = state.environments[0].id
-    if (auth && typeof auth === 'object' && !Array.isArray(auth)) state.auth = { ...state.auth, ...auth, secret: secret ?? '' }
-    if (Array.isArray(history)) state.history = history.slice(0, 30)
     if (preferences && typeof preferences === 'object' && !Array.isArray(preferences)) state.preferences = { ...state.preferences, ...preferences }
+    if (auth && typeof auth === 'object' && !Array.isArray(auth)) state.auth = { ...state.auth, ...auth, secret: secret ?? '' }
+    if (Array.isArray(history)) {
+      state.history = history.slice(0, 30).map(entry => ({ ...entry, ...redactHistoryRequest(entry, { includeBody: state.preferences.historyBodies }) }))
+      await orca.storage.set('history', state.history)
+    }
     const cookieStatus = await orca.plugin.request('cookies.status')
     state.cookieCount = Number(cookieStatus.count) || 0
   } catch (error) {

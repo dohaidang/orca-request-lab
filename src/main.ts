@@ -187,7 +187,7 @@ async function getOAuthToken(config: OAuth2Config, signal: AbortSignal): Promise
   try { tokenTarget = new URL(config.tokenUrl) } catch { throw invalid('Invalid OAuth token URL.') }
   if (!['http:', 'https:'].includes(tokenTarget.protocol)) throw invalid('OAuth token URL must use HTTP or HTTPS.')
   if (!config.clientId || !config.clientSecret) throw invalid('OAuth client ID and client secret are required.')
-  const cacheKey = `${tokenTarget.toString()}|${config.clientId}|${config.scope ?? ''}|${config.audience ?? ''}`
+  const cacheKey = `${tokenTarget.toString()}|${config.clientId}|${config.clientSecret}|${config.scope ?? ''}|${config.audience ?? ''}`
   const cached = oauthTokenCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now() + 30_000) return cached.token
 
@@ -232,7 +232,12 @@ function storeResponseCookies(response: Response, target: URL) {
       const [rawName, ...rest] = attribute.split('=')
       const name = rawName.toLowerCase()
       const attributeValue = rest.join('=')
-      if (name === 'domain') cookie.domain = attributeValue.replace(/^\./, '').toLowerCase()
+      if (name === 'domain') {
+        const candidate = attributeValue.replace(/^\./, '').toLowerCase()
+        const belongsToOrigin = target.hostname === candidate || target.hostname.endsWith(`.${candidate}`)
+        const isOverlyBroad = candidate !== target.hostname && !candidate.includes('.')
+        if (belongsToOrigin && !isOverlyBroad) cookie.domain = candidate
+      }
       else if (name === 'path') cookie.path = attributeValue || '/'
       else if (name === 'secure') cookie.secure = true
       else if (name === 'max-age') cookie.expires = Date.now() + Number(attributeValue) * 1000
@@ -246,8 +251,9 @@ function storeResponseCookies(response: Response, target: URL) {
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms)
-    signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason) }, { once: true })
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason) }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve() }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 

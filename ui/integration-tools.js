@@ -77,6 +77,24 @@ export function buildGraphqlRequest({ endpoint, operationName = '', query, varia
   return `# @name ${name}\n# @expect status 200\n# @expect json $.data exists\nPOST ${endpoint}\nContent-Type: application/json\nAccept: application/json\n\n${JSON.stringify(body, null, 2)}`
 }
 
+export function createWorkspaceBundle({ source, environments, includeValues = false, createdAt = Date.now() }) {
+  const safeEnvironments = environments.map(environment => ({
+    name: String(environment.name || 'Environment'),
+    variables: (environment.variables ?? []).map(variable => ({ key: String(variable.key), value: includeValues ? String(variable.value ?? '') : '' }))
+  }))
+  return JSON.stringify({ format: 'request-lab-workspace', version: 1, createdAt: new Date(createdAt).toISOString(), source: String(source ?? ''), environments: safeEnvironments }, null, 2)
+}
+
+export function parseWorkspaceBundle(source) {
+  let bundle
+  try { bundle = JSON.parse(source) } catch { throw new Error('Workspace bundle must be valid JSON.') }
+  if (bundle?.format !== 'request-lab-workspace' || bundle?.version !== 1 || typeof bundle.source !== 'string' || !Array.isArray(bundle.environments)) throw new Error('Unsupported Request Lab workspace bundle.')
+  return {
+    source: bundle.source,
+    environments: bundle.environments.map(environment => ({ name: String(environment?.name || 'Imported'), variables: Array.isArray(environment?.variables) ? environment.variables.filter(variable => variable && typeof variable.key === 'string').map(variable => ({ key: variable.key, value: String(variable.value ?? '') })) : [] }))
+  }
+}
+
 function summarize(results) {
   return { total: results.length, passed: results.filter(result => result.passed).length, failed: results.filter(result => !result.passed).length, durationMs: Math.round(results.reduce((sum, result) => sum + (result.elapsedMs ?? 0), 0) * 10) / 10 }
 }
