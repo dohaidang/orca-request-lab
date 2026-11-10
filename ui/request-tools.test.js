@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyAuth, parseCurl, resolveRequest, resolveVariables } from './request-tools.js'
+import { applyAuth, evaluateAssertions, extractCaptures, generateCode, getJsonPath, parseCurl, resolveRequest, resolveVariables } from './request-tools.js'
 
 test('resolves environment and dynamic variables', () => {
   const result = resolveVariables('{{baseUrl}}/items/{{$timestamp}}', { baseUrl: 'https://api.example.com' }, { timestamp: 42, randomUUID: 'id' })
@@ -24,4 +24,32 @@ test('imports a cURL request', () => {
   assert.match(result, /^POST https:\/\/example.com\/items/)
   assert.match(result, /Content-Type: application\/json/)
   assert.match(result, /\{"name":"demo"\}$/)
+})
+
+test('evaluates status, header, body, and JSON assertions', () => {
+  const response = {
+    status: 200,
+    body: '{"item":{"id":7},"tags":["ready"]}',
+    headers: [{ name: 'content-type', value: 'application/json; charset=utf-8' }]
+  }
+  const results = evaluateAssertions(response, [
+    { type: 'status', expected: 200, label: 'status' },
+    { type: 'header', key: 'content-type', operator: 'contains', expected: 'application/json', label: 'header' },
+    { type: 'json', path: '$.item.id', operator: 'equals', expected: '7', label: 'json' },
+    { type: 'body', operator: 'contains', expected: 'ready', label: 'body' }
+  ])
+  assert.equal(results.every(result => result.passed), true)
+})
+
+test('captures values from JSON responses', () => {
+  const [capture] = extractCaptures({ body: '{"session":{"token":"abc"}}' }, [{ name: 'token', path: '$.session.token' }])
+  assert.deepEqual(capture, { name: 'token', path: '$.session.token', ok: true, value: 'abc' })
+  assert.equal(getJsonPath({ items: [{ id: 4 }] }, '$.items[0].id'), 4)
+})
+
+test('generates cURL, JavaScript, and Python snippets', () => {
+  const request = { method: 'POST', url: 'https://example.com/items', headers: [{ name: 'Content-Type', value: 'application/json' }], body: '{"ok":true}' }
+  assert.match(generateCode(request, 'curl'), /curl -X POST/)
+  assert.match(generateCode(request, 'javascript'), /await fetch/)
+  assert.match(generateCode(request, 'python'), /requests\.request/)
 })

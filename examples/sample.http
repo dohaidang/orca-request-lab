@@ -1,8 +1,13 @@
 # @name Health check
+# @expect status 200
+# @expect header content-type contains application/json
 GET {{baseUrl}}/get?source=request-lab
 Accept: application/json
 
 ### Create record
+# @expect status 200
+# @expect json $.json.enabled equals true
+# @capture echoedRequestId $.json.requestId
 POST {{baseUrl}}/anything
 Content-Type: application/json
 X-Client: Request-Lab
@@ -14,5 +19,6 @@ X-Client: Request-Lab
 }
 
 ### Preview image
+# @expect status 200
 GET {{baseUrl}}/image/png
 Accept: image/png

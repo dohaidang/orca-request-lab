@@ -18,11 +18,20 @@ function parseSection(text, separatorTitle) {
   const lines = text.split('\n')
   let cursor = 0
   let name = separatorTitle
+  const assertions = []
+  const captures = []
 
   while (cursor < lines.length) {
     const line = lines[cursor].trim()
     const named = line.match(/^#\s*@name\s+(.+)$/i)
     if (named) name = named[1].trim()
+    const expected = line.match(/^#\s*@expect\s+(.+)$/i)
+    if (expected) {
+      const assertion = parseAssertion(expected[1].trim())
+      if (assertion) assertions.push(assertion)
+    }
+    const captured = line.match(/^#\s*@capture\s+([A-Za-z_][\w.-]*)\s+(\$[^\s]*)$/i)
+    if (captured) captures.push({ name: captured[1], path: captured[2] })
     if (line && !line.startsWith('#') && !line.startsWith('//')) break
     cursor += 1
   }
@@ -65,8 +74,22 @@ function parseSection(text, separatorTitle) {
     url,
     headers,
     body,
+    assertions,
+    captures,
     error
   }
+}
+
+function parseAssertion(source) {
+  const status = source.match(/^status\s+(\d{3})$/i)
+  if (status) return { type: 'status', expected: Number(status[1]), label: `Status is ${status[1]}` }
+  const header = source.match(/^header\s+(\S+)\s+(equals|contains|exists)(?:\s+(.+))?$/i)
+  if (header) return { type: 'header', key: header[1], operator: header[2].toLowerCase(), expected: header[3] ?? '', label: `${header[1]} ${header[2].toLowerCase()}${header[3] ? ` ${header[3]}` : ''}` }
+  const json = source.match(/^json\s+(\$[^\s]*)\s+(equals|contains|exists)(?:\s+(.+))?$/i)
+  if (json) return { type: 'json', path: json[1], operator: json[2].toLowerCase(), expected: json[3] ?? '', label: `${json[1]} ${json[2].toLowerCase()}${json[3] ? ` ${json[3]}` : ''}` }
+  const body = source.match(/^body\s+(contains|equals)\s+(.+)$/i)
+  if (body) return { type: 'body', operator: body[1].toLowerCase(), expected: body[2], label: `Body ${body[1].toLowerCase()} ${body[2]}` }
+  return { type: 'invalid', label: source }
 }
 
 function shortUrl(url) {

@@ -29,3 +29,15 @@ test('accepts an URL-only request as GET', () => {
 test('formats JSON response bodies', () => {
   assert.equal(formatBody('{"ok":true}', 'application/json'), '{\n  "ok": true\n}')
 })
+
+test('parses assertions and response captures', () => {
+  const [request] = parseRequests(`# @name Create session
+# @expect status 201
+# @expect header content-type contains application/json
+# @expect json $.token exists
+# @capture accessToken $.token
+POST https://example.com/session`)
+  assert.equal(request.assertions.length, 3)
+  assert.deepEqual(request.captures, [{ name: 'accessToken', path: '$.token' }])
+  assert.equal(request.assertions[0].expected, 201)
+})

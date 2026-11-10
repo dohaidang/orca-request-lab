@@ -1,5 +1,5 @@
 import { formatBody, parseRequests } from './http-parser.js'
-import { applyAuth, parseCurl, resolveRequest } from './request-tools.js'
+import { applyAuth, evaluateAssertions, extractCaptures, generateCode, parseCurl, resolveRequest } from './request-tools.js'
 
 const isEditor = document.documentElement.dataset.mode === 'editor'
 const sample = `# @name Read a sample post
@@ -36,6 +36,9 @@ const state = {
   activeEnvironmentId: defaultEnvironment.id,
   auth: { type: 'none', username: '', name: 'X-API-Key', placement: 'header', secret: '' },
   history: [],
+  runResults: [],
+  collectionRunning: false,
+  collectionAbort: false,
   drawer: ''
 }
 
@@ -50,6 +53,9 @@ app.innerHTML = `
         <button class="tool-button" data-drawer="auth" type="button"><span id="auth-indicator" class="tool-dot"></span>Auth</button>
         <button class="tool-button" data-drawer="history" type="button">History <span id="history-count" class="count-badge">0</span></button>
         <button class="tool-button" data-drawer="curl" type="button">Import cURL</button>
+        <button class="tool-button" data-drawer="code" type="button">Generate code</button>
+        <button id="run-all" class="button run-all" type="button"><span>▶▶</span> Run all</button>
+        <button class="tool-button" data-drawer="results" type="button">Results <span id="results-count" class="count-badge">0</span></button>
         <label class="timeout-label">Timeout <input id="timeout" type="number" min="1" max="300" value="30" aria-label="Timeout in seconds"><span>s</span></label>
         <button id="clear" class="button ghost" type="button">Clear</button>
       </div>
@@ -76,6 +82,7 @@ app.innerHTML = `
           <div class="response-tabs" role="tablist">
             <button class="response-tab active" data-tab="body" role="tab" type="button">Body</button>
             <button class="response-tab" data-tab="headers" role="tab" type="button">Headers</button>
+            <button class="response-tab" data-tab="tests" role="tab" type="button">Tests <span id="test-count" class="test-count">0</span></button>
           </div>
         </div>
         <div id="response-view" class="response-view empty-state"></div>
@@ -92,7 +99,7 @@ app.innerHTML = `
 const elements = Object.fromEntries([
   'source', 'requests', 'request-title', 'parse-state', 'method-chip', 'target-url', 'send', 'cancel', 'clear',
   'timeout', 'response-metrics', 'response-view', 'toast', 'environment-select', 'history-count', 'auth-indicator',
-  'drawer', 'drawer-title', 'drawer-content', 'drawer-close', 'scrim'
+  'drawer', 'drawer-title', 'drawer-content', 'drawer-close', 'scrim', 'run-all', 'results-count', 'test-count'
 ].map(id => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]))
 
 function activeEnvironment() {
@@ -119,7 +126,8 @@ function renderTabs() {
     button.type = 'button'
     button.className = `request-tab${index === state.selected ? ' active' : ''}`
     button.setAttribute('aria-pressed', String(index === state.selected))
-    button.innerHTML = `<span class="tab-method method-${escapeText(request.method)}">${escapeText(request.method)}</span><span>${escapeText(request.name)}</span>${request.error ? '<i aria-label="Invalid request">!</i>' : ''}`
+    const run = [...state.runResults].reverse().find(item => item.requestId === request.id)
+    button.innerHTML = `<span class="tab-method method-${escapeText(request.method)}">${escapeText(request.method)}</span><span>${escapeText(request.name)}</span>${request.error ? '<i aria-label="Invalid request">!</i>' : run ? `<b class="run-signal ${run.passed ? 'passed' : 'failed'}" aria-label="${run.passed ? 'Passed' : 'Failed'}"></b>` : ''}`
     button.addEventListener('click', () => { state.selected = index; renderTabs(); renderRequestMeta() })
     return button
   }))
@@ -157,31 +165,18 @@ function renderRequestMeta() {
 async function sendRequest() {
   const template = state.requests[state.selected]
   if (!template || template.error || state.running) return
-  const resolved = resolveRequest(template, environmentValues())
-  if (resolved.missing.length) {
-    showToast(`Missing variables: ${resolved.missing.join(', ')}`)
-    openDrawer('environment')
-    return
-  }
-  const request = applyAuth(resolved.request, state.auth)
   state.running = true
-  state.activeRequestId = crypto.randomUUID()
   setRunning(true)
-
   try {
-    const result = await orca.plugin.request('request.send', {
-      requestId: state.activeRequestId,
-      method: request.method,
-      url: request.url,
-      headers: request.headers,
-      body: request.body,
-      timeoutMs: Number(elements.timeout.value) * 1000
-    }, { timeoutMs: Math.min(310_000, Number(elements.timeout.value) * 1000 + 10_000) })
+    const result = await executeTemplate(template)
+    if (!result) return
     state.response = result
     state.responseTab = 'body'
     syncResponseTabs()
     renderResponse()
     await recordHistory(template, result)
+    recordRunResult(template, result)
+    renderTabs()
   } catch (error) {
     state.response = { ok: false, error: error instanceof Error ? error.message : 'The worker did not respond.' }
     renderResponse()
@@ -192,8 +187,98 @@ async function sendRequest() {
   }
 }
 
+async function executeTemplate(template) {
+  const resolved = resolveRequest(template, environmentValues())
+  if (resolved.missing.length) {
+    showToast(`Missing variables: ${resolved.missing.join(', ')}`)
+    if (!state.collectionRunning) openDrawer('environment')
+    return null
+  }
+  const request = applyAuth(resolved.request, state.auth)
+  state.activeRequestId = crypto.randomUUID()
+  const result = await orca.plugin.request('request.send', {
+    requestId: state.activeRequestId,
+    method: request.method,
+    url: request.url,
+    headers: request.headers,
+    body: request.body,
+    timeoutMs: Number(elements.timeout.value) * 1000
+  }, { timeoutMs: Math.min(310_000, Number(elements.timeout.value) * 1000 + 10_000) })
+  const tests = result.ok ? evaluateAssertions(result, template.assertions) : []
+  const captures = result.ok ? extractCaptures(result, template.captures) : []
+  if (captures.some(capture => capture.ok)) await applyCapturedVariables(captures)
+  return { ...result, tests, captures }
+}
+
+async function applyCapturedVariables(captures) {
+  const environment = activeEnvironment()
+  for (const capture of captures.filter(item => item.ok)) {
+    const existing = environment.variables.find(variable => variable.key === capture.name)
+    if (existing) existing.value = capture.value
+    else environment.variables.push({ key: capture.name, value: capture.value })
+  }
+  await persistEnvironments()
+  renderRequestMeta()
+}
+
+function recordRunResult(template, result) {
+  const testsPassed = (result.tests ?? []).every(test => test.passed)
+  const capturesPassed = (result.captures ?? []).every(capture => capture.ok)
+  state.runResults.push({
+    id: crypto.randomUUID(), requestId: template.id, name: template.name, method: template.method,
+    status: result.ok ? result.status : 0, elapsedMs: result.ok ? result.elapsedMs : null,
+    passed: Boolean(result.ok && testsPassed && capturesPassed), tests: result.tests ?? [], captures: result.captures ?? []
+  })
+  state.runResults = state.runResults.slice(-100)
+  elements.resultsCount.textContent = String(state.runResults.length)
+  elements.testCount.textContent = String((result.tests ?? []).length)
+}
+
+async function runAllRequests() {
+  if (state.running || state.collectionRunning || !state.requests.length) return
+  state.collectionRunning = true
+  state.collectionAbort = false
+  state.runResults = []
+  elements.resultsCount.textContent = '0'
+  elements.runAll.classList.add('loading')
+  elements.runAll.innerHTML = '<span>■</span> Stop run'
+  elements.runAll.disabled = false
+
+  try {
+    for (const template of state.requests) {
+      if (state.collectionAbort) break
+      if (template.error) {
+        recordRunResult(template, { ok: false, tests: [], captures: [] })
+        continue
+      }
+      state.running = true
+      setRunning(true)
+      let result
+      try { result = await executeTemplate(template) }
+      catch (error) { result = { ok: false, error: error instanceof Error ? error.message : 'Request failed.', tests: [], captures: [] } }
+      if (!result) {
+        recordRunResult(template, { ok: false, tests: [], captures: [] })
+        break
+      }
+      recordRunResult(template, result)
+      await recordHistory(template, result)
+      state.response = result
+      renderTabs()
+    }
+  } finally {
+    state.running = false
+    state.collectionRunning = false
+    state.activeRequestId = ''
+    setRunning(false)
+    elements.runAll.classList.remove('loading')
+    elements.runAll.innerHTML = '<span>▶▶</span> Run all'
+    openDrawer('results')
+  }
+}
+
 async function cancelRequest() {
   if (!state.activeRequestId) return
+  state.collectionAbort = true
   elements.cancel.disabled = true
   try { await orca.plugin.request('request.cancel', { requestId: state.activeRequestId }) }
   catch { showToast('Could not send the cancel command.') }
@@ -212,12 +297,14 @@ function setRunning(running) {
 function renderResponse() {
   const response = state.response
   if (!response) {
+    elements.testCount.textContent = '0'
     elements.responseMetrics.innerHTML = '<span class="metric muted">Not sent</span>'
     elements.responseView.className = 'response-view empty-state'
     elements.responseView.innerHTML = '<div class="pulse-mark"><span></span><span></span><span></span></div><h2>Waiting for a signal</h2><p>Select a request and send it. The response will appear here.</p>'
     return
   }
   if (!response.ok) {
+    elements.testCount.textContent = '0'
     elements.responseMetrics.innerHTML = '<span class="metric status error">ERROR</span>'
     elements.responseView.className = 'response-view error-state'
     elements.responseView.innerHTML = `<div class="error-code">×</div><h2>${response.cancelled ? 'Request stopped' : 'Connection failed'}</h2><p>${escapeText(response.error || 'An unknown error occurred.')}</p>`
@@ -226,8 +313,11 @@ function renderResponse() {
   const statusClass = response.status >= 200 && response.status < 300 ? 'success' : response.status >= 400 ? 'error' : 'warning'
   elements.responseMetrics.innerHTML = `<span class="metric status ${statusClass}">${response.status} ${escapeText(response.statusText)}</span><span class="metric">${formatDuration(response.elapsedMs)}</span><span class="metric">${formatBytes(response.declaredSize || response.size)}</span>${response.truncated ? '<span class="metric warning">Truncated</span>' : ''}`
   elements.responseView.className = 'response-view'
+  elements.testCount.textContent = String((response.tests ?? []).length)
 
-  if (state.responseTab === 'headers') {
+  if (state.responseTab === 'tests') {
+    elements.responseView.innerHTML = renderTestReport(response.tests ?? [], response.captures ?? [])
+  } else if (state.responseTab === 'headers') {
     const rows = response.headers.map(header => `<div class="header-row"><strong>${escapeText(header.name)}</strong><span>${escapeText(header.value)}</span></div>`).join('')
     elements.responseView.innerHTML = `<div class="headers-table">${rows || '<p>No response headers.</p>'}</div>`
   } else if (response.bodyKind === 'image') {
@@ -237,6 +327,14 @@ function renderResponse() {
   } else {
     elements.responseView.innerHTML = `<pre><code>${escapeText(formatBody(response.body, response.contentType) || '(empty body)')}</code></pre>`
   }
+}
+
+function renderTestReport(tests, captures) {
+  if (!tests.length && !captures.length) return '<div class="empty-state"><div class="test-orbit">T</div><h2>No checks declared</h2><p>Add <code># @expect</code> or <code># @capture</code> directives before the request line.</p></div>'
+  const testRows = tests.map(test => `<div class="check-row ${test.passed ? 'passed' : 'failed'}"><span>${test.passed ? '✓' : '×'}</span><div><strong>${escapeText(test.label)}</strong><small>${test.error ? escapeText(test.error) : `Actual: ${escapeText(JSON.stringify(test.actual))}`}</small></div></div>`).join('')
+  const captureRows = captures.map(capture => `<div class="check-row ${capture.ok ? 'passed' : 'failed'}"><span>${capture.ok ? '↳' : '×'}</span><div><strong>Capture ${escapeText(capture.name)} from ${escapeText(capture.path)}</strong><small>${capture.ok ? `Saved: ${escapeText(capture.value)}` : escapeText(capture.error)}</small></div></div>`).join('')
+  const passed = tests.filter(test => test.passed).length + captures.filter(capture => capture.ok).length
+  return `<div class="test-report"><div class="test-summary"><span>${passed}/${tests.length + captures.length}</span><div><strong>Checks passed</strong><small>Assertions and captured variables</small></div></div>${testRows}${captureRows}</div>`
 }
 
 async function recordHistory(request, response) {
@@ -277,6 +375,8 @@ function renderDrawer() {
   else if (state.drawer === 'auth') renderAuthDrawer()
   else if (state.drawer === 'history') renderHistoryDrawer()
   else if (state.drawer === 'curl') renderCurlDrawer()
+  else if (state.drawer === 'code') renderCodeDrawer()
+  else if (state.drawer === 'results') renderResultsDrawer()
 }
 
 function renderEnvironmentDrawer() {
@@ -444,6 +544,69 @@ function importCurl() {
   }
 }
 
+function renderCodeDrawer() {
+  elements.drawerTitle.textContent = 'Generate code'
+  const template = state.requests[state.selected]
+  if (!template) {
+    elements.drawerContent.innerHTML = '<div class="quiet-block">Select a valid request first.</div>'
+    return
+  }
+  const resolved = resolveRequest(template, environmentValues())
+  if (resolved.missing.length) {
+    elements.drawerContent.innerHTML = `<div class="quiet-block">Resolve these variables first: ${escapeText(resolved.missing.join(', '))}</div>`
+    return
+  }
+  elements.drawerContent.innerHTML = `
+    <p class="drawer-lead">Generate a runnable snippet from the resolved request. Saved authentication is intentionally excluded.</p>
+    <div class="code-languages" role="tablist"><button class="code-language active" data-language="curl" type="button">cURL</button><button class="code-language" data-language="javascript" type="button">JavaScript</button><button class="code-language" data-language="python" type="button">Python</button></div>
+    <textarea id="generated-code" class="field generated-code" readonly></textarea>
+    <button id="copy-code" class="button primary drawer-primary" type="button">Copy code</button>`
+  const renderLanguage = language => {
+    document.querySelector('#generated-code').value = generateCode(resolved.request, language)
+    document.querySelectorAll('.code-language').forEach(button => button.classList.toggle('active', button.dataset.language === language))
+  }
+  document.querySelectorAll('.code-language').forEach(button => button.addEventListener('click', () => renderLanguage(button.dataset.language)))
+  document.querySelector('#copy-code').addEventListener('click', copyGeneratedCode)
+  renderLanguage('curl')
+}
+
+async function copyGeneratedCode() {
+  const field = document.querySelector('#generated-code')
+  try {
+    await navigator.clipboard.writeText(field.value)
+    showToast('Code copied to the clipboard.')
+  } catch {
+    field.select()
+    const copied = document.execCommand('copy')
+    showToast(copied ? 'Code copied to the clipboard.' : 'Select the code and copy it manually.')
+  }
+}
+
+function renderResultsDrawer() {
+  elements.drawerTitle.textContent = 'Collection results'
+  if (!state.runResults.length) {
+    elements.drawerContent.innerHTML = '<div class="quiet-block">Run the collection to see status and assertion results.</div>'
+    return
+  }
+  const passed = state.runResults.filter(item => item.passed).length
+  const totalTime = state.runResults.reduce((sum, item) => sum + (item.elapsedMs ?? 0), 0)
+  elements.drawerContent.innerHTML = `
+    <div class="collection-score ${passed === state.runResults.length ? 'passed' : 'failed'}"><strong>${passed}/${state.runResults.length}</strong><span>requests passed</span><small>${formatDuration(totalTime)} total</small></div>
+    <div class="result-list">${state.runResults.map(resultRow).join('')}</div>`
+  document.querySelectorAll('[data-result-index]').forEach(button => button.addEventListener('click', () => {
+    const result = state.runResults[Number(button.dataset.resultIndex)]
+    const index = state.requests.findIndex(request => request.id === result.requestId)
+    if (index >= 0) { state.selected = index; renderTabs(); renderRequestMeta() }
+    closeDrawer()
+  }))
+}
+
+function resultRow(item, index) {
+  const checks = item.tests.length + item.captures.length
+  const passedChecks = item.tests.filter(test => test.passed).length + item.captures.filter(capture => capture.ok).length
+  return `<button class="result-row ${item.passed ? 'passed' : 'failed'}" data-result-index="${index}" type="button"><span class="result-light"></span><span class="result-detail"><strong>${escapeText(item.name)}</strong><small>${escapeText(item.method)} · ${item.status || 'ERR'} · ${item.elapsedMs == null ? '—' : formatDuration(item.elapsedMs)}</small></span><span class="result-checks">${passedChecks}/${checks}</span></button>`
+}
+
 function syncResponseTabs() {
   document.querySelectorAll('.response-tab').forEach(button => button.classList.toggle('active', button.dataset.tab === state.responseTab))
 }
@@ -470,6 +633,7 @@ elements.source.addEventListener('keydown', event => {
 })
 elements.send.addEventListener('click', sendRequest)
 elements.cancel.addEventListener('click', cancelRequest)
+elements.runAll.addEventListener('click', () => state.collectionRunning ? cancelRequest() : runAllRequests())
 elements.clear.addEventListener('click', () => { state.response = null; renderResponse(); setRunning(false) })
 elements.environmentSelect.addEventListener('change', async event => { state.activeEnvironmentId = event.target.value; await orca.storage.set('activeEnvironmentId', state.activeEnvironmentId); renderRequestMeta() })
 document.querySelectorAll('[data-drawer]').forEach(button => button.addEventListener('click', () => openDrawer(button.dataset.drawer)))
