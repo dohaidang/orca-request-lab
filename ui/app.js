@@ -1,5 +1,6 @@
 import { formatBody, parseRequests } from './http-parser.js'
 import { applyAuth, evaluateAssertions, extractCaptures, generateCode, parseCurl, resolveRequest } from './request-tools.js'
+import { exportRunReport, importOpenApi } from './integration-tools.js'
 
 const isEditor = document.documentElement.dataset.mode === 'editor'
 const sample = `# @name Read a sample post
@@ -39,6 +40,8 @@ const state = {
   runResults: [],
   collectionRunning: false,
   collectionAbort: false,
+  preferences: { cookieJar: true, maxRetries: 1 },
+  cookieCount: 0,
   drawer: ''
 }
 
@@ -53,7 +56,9 @@ app.innerHTML = `
         <button class="tool-button" data-drawer="auth" type="button"><span id="auth-indicator" class="tool-dot"></span>Auth</button>
         <button class="tool-button" data-drawer="history" type="button">History <span id="history-count" class="count-badge">0</span></button>
         <button class="tool-button" data-drawer="curl" type="button">Import cURL</button>
+        <button class="tool-button" data-drawer="openapi" type="button">OpenAPI</button>
         <button class="tool-button" data-drawer="code" type="button">Generate code</button>
+        <button class="tool-button" data-drawer="network" type="button"><span id="network-indicator" class="tool-dot"></span>Network</button>
         <button id="run-all" class="button run-all" type="button"><span>▶▶</span> Run all</button>
         <button class="tool-button" data-drawer="results" type="button">Results <span id="results-count" class="count-badge">0</span></button>
         <label class="timeout-label">Timeout <input id="timeout" type="number" min="1" max="300" value="30" aria-label="Timeout in seconds"><span>s</span></label>
@@ -99,7 +104,7 @@ app.innerHTML = `
 const elements = Object.fromEntries([
   'source', 'requests', 'request-title', 'parse-state', 'method-chip', 'target-url', 'send', 'cancel', 'clear',
   'timeout', 'response-metrics', 'response-view', 'toast', 'environment-select', 'history-count', 'auth-indicator',
-  'drawer', 'drawer-title', 'drawer-content', 'drawer-close', 'scrim', 'run-all', 'results-count', 'test-count'
+  'drawer', 'drawer-title', 'drawer-content', 'drawer-close', 'scrim', 'run-all', 'results-count', 'test-count', 'network-indicator'
 ].map(id => [id.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), document.querySelector(`#${id}`)]))
 
 function activeEnvironment() {
@@ -202,11 +207,15 @@ async function executeTemplate(template) {
     url: request.url,
     headers: request.headers,
     body: request.body,
-    timeoutMs: Number(elements.timeout.value) * 1000
+      timeoutMs: Number(elements.timeout.value) * 1000,
+      cookieJar: state.preferences.cookieJar,
+      maxRetries: state.preferences.maxRetries
   }, { timeoutMs: Math.min(310_000, Number(elements.timeout.value) * 1000 + 10_000) })
   const tests = result.ok ? evaluateAssertions(result, template.assertions) : []
   const captures = result.ok ? extractCaptures(result, template.captures) : []
   if (captures.some(capture => capture.ok)) await applyCapturedVariables(captures)
+  state.cookieCount = result.cookieCount ?? state.cookieCount
+  renderNetworkIndicator()
   return { ...result, tests, captures }
 }
 
@@ -311,7 +320,7 @@ function renderResponse() {
     return
   }
   const statusClass = response.status >= 200 && response.status < 300 ? 'success' : response.status >= 400 ? 'error' : 'warning'
-  elements.responseMetrics.innerHTML = `<span class="metric status ${statusClass}">${response.status} ${escapeText(response.statusText)}</span><span class="metric">${formatDuration(response.elapsedMs)}</span><span class="metric">${formatBytes(response.declaredSize || response.size)}</span>${response.truncated ? '<span class="metric warning">Truncated</span>' : ''}`
+  elements.responseMetrics.innerHTML = `<span class="metric status ${statusClass}">${response.status} ${escapeText(response.statusText)}</span><span class="metric">${formatDuration(response.elapsedMs)}</span><span class="metric">${formatBytes(response.declaredSize || response.size)}</span>${response.attempts > 1 ? `<span class="metric warning">${response.attempts} attempts</span>` : ''}${response.truncated ? '<span class="metric warning">Truncated</span>' : ''}`
   elements.responseView.className = 'response-view'
   elements.testCount.textContent = String((response.tests ?? []).length)
 
@@ -377,6 +386,8 @@ function renderDrawer() {
   else if (state.drawer === 'curl') renderCurlDrawer()
   else if (state.drawer === 'code') renderCodeDrawer()
   else if (state.drawer === 'results') renderResultsDrawer()
+  else if (state.drawer === 'openapi') renderOpenApiDrawer()
+  else if (state.drawer === 'network') renderNetworkDrawer()
 }
 
 function renderEnvironmentDrawer() {
@@ -544,6 +555,55 @@ function importCurl() {
   }
 }
 
+function renderOpenApiDrawer() {
+  elements.drawerTitle.textContent = 'Import OpenAPI'
+  elements.drawerContent.innerHTML = `<p class="drawer-lead">Paste an OpenAPI 3.x JSON document. Operations become editable requests with required query variables, example bodies, and success assertions.</p><label class="form-label">OpenAPI JSON<textarea id="openapi-input" class="field openapi-input" spellcheck="false" placeholder="{\n  &quot;openapi&quot;: &quot;3.0.3&quot;,\n  &quot;paths&quot;: {}\n}"></textarea></label><button id="openapi-import" class="button primary drawer-primary" type="button">Build collection</button>`
+  document.querySelector('#openapi-import').addEventListener('click', () => {
+    try {
+      const converted = importOpenApi(document.querySelector('#openapi-input').value)
+      elements.source.value = converted
+      elements.source.dispatchEvent(new Event('input'))
+      state.selected = 0
+      renderTabs()
+      renderRequestMeta()
+      closeDrawer()
+      showToast(`${state.requests.length} OpenAPI operations imported.`)
+    } catch (error) { showToast(error instanceof Error ? error.message : 'OpenAPI import failed.') }
+  })
+  document.querySelector('#openapi-input').focus()
+}
+
+function renderNetworkDrawer() {
+  elements.drawerTitle.textContent = 'Network runtime'
+  elements.drawerContent.innerHTML = `
+    <p class="drawer-lead">Cookie state is held in worker memory and disappears when the plugin stops. Retries apply only to idempotent methods and transient failures.</p>
+    <label class="switch-row"><span><strong>Session cookie jar</strong><small>${state.cookieCount} stored cookie${state.cookieCount === 1 ? '' : 's'}</small></span><input id="cookie-jar" type="checkbox" ${state.preferences.cookieJar ? 'checked' : ''}></label>
+    <label class="form-label">Maximum retries<select id="max-retries" class="field"><option value="0">Disabled</option><option value="1">1 retry</option><option value="2">2 retries</option><option value="3">3 retries</option></select></label>
+    <div class="network-note"><span>RETRY STATUS</span><code>429 · 502 · 503 · 504</code></div>
+    <button id="network-save" class="button primary drawer-primary" type="button">Save runtime settings</button>
+    <button id="cookies-clear" class="button danger drawer-secondary" type="button">Clear session cookies</button>`
+  document.querySelector('#max-retries').value = String(state.preferences.maxRetries)
+  document.querySelector('#network-save').addEventListener('click', async () => {
+    state.preferences = { cookieJar: document.querySelector('#cookie-jar').checked, maxRetries: Number(document.querySelector('#max-retries').value) }
+    await orca.storage.set('preferences', state.preferences)
+    renderNetworkIndicator()
+    closeDrawer()
+    showToast('Network settings saved.')
+  })
+  document.querySelector('#cookies-clear').addEventListener('click', async () => {
+    const result = await orca.plugin.request('cookies.clear')
+    state.cookieCount = 0
+    renderNetworkIndicator()
+    renderNetworkDrawer()
+    showToast(`${result.cleared} session cookie${result.cleared === 1 ? '' : 's'} cleared.`)
+  })
+}
+
+function renderNetworkIndicator() {
+  elements.networkIndicator.classList.toggle('active', state.preferences.cookieJar || state.preferences.maxRetries > 0)
+  elements.networkIndicator.title = `${state.cookieCount} cookies · ${state.preferences.maxRetries} retries`
+}
+
 function renderCodeDrawer() {
   elements.drawerTitle.textContent = 'Generate code'
   const template = state.requests[state.selected]
@@ -592,13 +652,23 @@ function renderResultsDrawer() {
   const totalTime = state.runResults.reduce((sum, item) => sum + (item.elapsedMs ?? 0), 0)
   elements.drawerContent.innerHTML = `
     <div class="collection-score ${passed === state.runResults.length ? 'passed' : 'failed'}"><strong>${passed}/${state.runResults.length}</strong><span>requests passed</span><small>${formatDuration(totalTime)} total</small></div>
+    <div class="report-actions"><button class="button" data-report="json" type="button">Export JSON</button><button class="button" data-report="junit" type="button">Export JUnit</button></div>
     <div class="result-list">${state.runResults.map(resultRow).join('')}</div>`
+  document.querySelectorAll('[data-report]').forEach(button => button.addEventListener('click', () => saveRunReport(button.dataset.report)))
   document.querySelectorAll('[data-result-index]').forEach(button => button.addEventListener('click', () => {
     const result = state.runResults[Number(button.dataset.resultIndex)]
     const index = state.requests.findIndex(request => request.id === result.requestId)
     if (index >= 0) { state.selected = index; renderTabs(); renderRequestMeta() }
     closeDrawer()
   }))
+}
+
+async function saveRunReport(format) {
+  if (!orca.files) { showToast('File export is unavailable in this Orca surface.'); return }
+  const data = exportRunReport(state.runResults, format, { environment: activeEnvironment()?.name })
+  const extension = format === 'junit' ? 'xml' : 'json'
+  const result = await orca.files.saveAs({ suggestedName: `request-lab-report.${extension}`, mimeType: format === 'junit' ? 'application/xml' : 'application/json', data })
+  if (result.status === 'saved') showToast(`${format === 'junit' ? 'JUnit' : 'JSON'} report saved.`)
 }
 
 function resultRow(item, index) {
@@ -644,14 +714,17 @@ document.querySelectorAll('.response-tab').forEach(button => button.addEventList
 
 async function loadPersistedState() {
   try {
-    const [environments, activeId, auth, history, secret] = await Promise.all([
-      orca.storage.get('environments'), orca.storage.get('activeEnvironmentId'), orca.storage.get('auth'), orca.storage.get('history'), orca.secrets.get('auth-secret')
+    const [environments, activeId, auth, history, secret, preferences] = await Promise.all([
+      orca.storage.get('environments'), orca.storage.get('activeEnvironmentId'), orca.storage.get('auth'), orca.storage.get('history'), orca.secrets.get('auth-secret'), orca.storage.get('preferences')
     ])
     if (Array.isArray(environments) && environments.length) state.environments = environments
     if (typeof activeId === 'string' && state.environments.some(item => item.id === activeId)) state.activeEnvironmentId = activeId
     else state.activeEnvironmentId = state.environments[0].id
     if (auth && typeof auth === 'object' && !Array.isArray(auth)) state.auth = { ...state.auth, ...auth, secret: secret ?? '' }
     if (Array.isArray(history)) state.history = history.slice(0, 30)
+    if (preferences && typeof preferences === 'object' && !Array.isArray(preferences)) state.preferences = { ...state.preferences, ...preferences }
+    const cookieStatus = await orca.plugin.request('cookies.status')
+    state.cookieCount = Number(cookieStatus.count) || 0
   } catch (error) {
     showToast(`Local settings could not be loaded: ${error instanceof Error ? error.message : 'unknown error'}`)
   }
@@ -673,6 +746,7 @@ async function initialize() {
   renderEnvironmentSelect()
   renderAuthIndicator()
   renderHistoryCount()
+  renderNetworkIndicator()
   refreshRequests({ preserveSelection: false })
   renderResponse()
 }

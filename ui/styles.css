@@ -156,6 +156,16 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 .drawer-primary { width: 100%; margin-top: 20px; }
 .quiet-block { display: grid; place-items: center; min-height: 90px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; text-align: center; }
 .curl-input { min-height: 190px; resize: vertical; white-space: pre; }
+.openapi-input { min-height: 340px; resize: vertical; white-space: pre; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.switch-row > span { display: grid; gap: 4px; }
+.switch-row strong { font-size: 10px; }
+.switch-row small { color: var(--muted); font: 8px Iosevka, "JetBrains Mono", monospace; }
+.switch-row input { width: 32px; height: 17px; accent-color: var(--accent); }
+.network-note { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; padding: 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.network-note span { color: var(--muted); font: 750 8px Iosevka, "JetBrains Mono", monospace; letter-spacing: .12em; }
+.network-note code { color: var(--amber); font: 9px Iosevka, "JetBrains Mono", monospace; }
+.drawer-secondary { width: 100%; margin-top: 8px; }
 .history-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .history-head .drawer-lead { margin-bottom: 12px; }
 .history-list { display: grid; gap: 6px; }
@@ -198,6 +208,7 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 .collection-score span { font-size: 11px; font-weight: 650; }
 .collection-score small { color: var(--muted); font: 8px Iosevka, "JetBrains Mono", monospace; }
 .result-list { display: grid; gap: 6px; }
+.report-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
 .result-row { width: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr) 34px; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 7px; padding: 10px; color: var(--text); background: color-mix(in srgb, var(--surface) 74%, transparent); text-align: left; cursor: pointer; }
 .result-row:hover { border-color: var(--line-strong); }
 .result-light { width: 7px; height: 7px; border-radius: 50%; }

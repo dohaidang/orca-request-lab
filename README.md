@@ -19,6 +19,10 @@ Request Lab is a focused HTTP workbench for Orca IDE. It reads `.http` and `.res
 - JSON response capture into the active environment.
 - Sequential collection runner with pass/fail results.
 - Code generation for cURL, JavaScript Fetch, and Python Requests.
+- OpenAPI 3.x JSON import with generated requests, examples, and assertions.
+- In-memory session cookie jar with domain, path, expiry, and secure-cookie handling.
+- Configurable retries for idempotent requests and transient HTTP failures.
+- Collection report export as JSON or JUnit XML.
 - No telemetry and no intermediary request service.
 
 ## Requirements
@@ -105,6 +109,32 @@ Choose **Run all** to execute requests from top to bottom. Request Lab applies t
 ## Code generation
 
 Choose **Generate code** for the selected request and switch between cURL, JavaScript Fetch, and Python Requests. Environment variables are resolved, while saved authentication is deliberately excluded so encrypted credentials are not exposed in generated source.
+
+## OpenAPI import
+
+Choose **OpenAPI**, paste an OpenAPI 3.x JSON document, and build a collection. Request Lab imports every supported path operation, converts path and required query parameters into `{{variables}}`, creates request body examples from schemas, and adds an assertion for explicit `2xx` responses.
+
+The importer intentionally accepts JSON only. YAML documents should be converted to JSON before import.
+
+## Network runtime
+
+Open **Network** to configure session cookies and retry behavior:
+
+- The cookie jar respects cookie domain, path, expiry, and `Secure` attributes.
+- Cookies live only in worker memory and disappear when the plugin stops.
+- Cookies can be cleared immediately from the Network panel.
+- Retries are limited to GET, HEAD, PUT, DELETE, and OPTIONS.
+- Retryable responses are `429`, `502`, `503`, and `504`, plus transient network failures.
+- The retry limit is capped at three attempts after the initial request.
+
+## Reports
+
+After running a collection, open **Results** and export either:
+
+- **JSON** for custom tooling and archival.
+- **JUnit XML** for CI systems and test-report viewers.
+
+Reports contain request names, status codes, timing, assertions, captures, and summary counts. They do not contain encrypted authentication credentials.
 
 ## Limits and privacy
 

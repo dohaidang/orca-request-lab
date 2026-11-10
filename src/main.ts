@@ -8,10 +8,17 @@ type RequestInput = {
   headers?: HeaderPair[]
   body?: string
   timeoutMs?: number
+  cookieJar?: boolean
+  maxRetries?: number
 }
+
+type StoredCookie = { name: string; value: string; domain: string; path: string; secure: boolean; expires: number | null }
 
 const MAX_RESPONSE_BYTES = 768 * 1024
 const activeRequests = new Map<string, AbortController>()
+const cookieJar = new Map<string, StoredCookie>()
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
+const RETRYABLE_METHOD = new Set(['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS'])
 
 function invalid(message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code: 'invalid_params' })
@@ -96,15 +103,37 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
   }
   const mayHaveBody = method !== 'GET' && method !== 'HEAD'
   const started = performance.now()
+  const maxRetries = RETRYABLE_METHOD.has(method) ? Math.min(Math.max(Number(input.maxRetries) || 0, 0), 3) : 0
+  let attempts = 0
 
   try {
-    const response = await fetch(target, {
-      method,
-      headers,
-      body: mayHaveBody && input.body ? input.body : undefined,
-      redirect: 'follow',
-      signal: controller.signal
-    })
+    let response: Response | undefined
+    let lastError: unknown
+    while (attempts <= maxRetries) {
+      attempts += 1
+      const attemptHeaders = new Headers(headers)
+      if (input.cookieJar && !attemptHeaders.has('cookie')) {
+        const cookie = cookieHeader(target)
+        if (cookie) attemptHeaders.set('cookie', cookie)
+      }
+      try {
+        response = await fetch(target, {
+          method,
+          headers: attemptHeaders,
+          body: mayHaveBody && input.body ? input.body : undefined,
+          redirect: 'follow',
+          signal: controller.signal
+        })
+        if (input.cookieJar) storeResponseCookies(response, target)
+        if (!RETRYABLE_STATUS.has(response.status) || attempts > maxRetries) break
+        await response.body?.cancel()
+      } catch (error) {
+        lastError = error
+        if (controller.signal.aborted || attempts > maxRetries) throw error
+      }
+      await abortableDelay(Math.min(250 * 2 ** (attempts - 1), 1_000), controller.signal)
+    }
+    if (!response) throw lastError ?? new Error('The request could not be sent.')
     const { bytes, truncated } = await readLimited(response)
     const elapsedMs = performance.now() - started
     const contentType = response.headers.get('content-type') ?? ''
@@ -125,6 +154,8 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
       bodyKind,
       body,
       truncated,
+      attempts,
+      cookieCount: cookieJar.size,
       headers: Array.from(response.headers.entries()).map(([name, value]) => ({ name, value }))
     }
   } catch (error) {
@@ -145,6 +176,48 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
   }
 }
 
+function cookieHeader(target: URL): string {
+  const now = Date.now()
+  const matches: string[] = []
+  for (const [key, cookie] of cookieJar) {
+    if (cookie.expires !== null && cookie.expires <= now) { cookieJar.delete(key); continue }
+    const domainMatches = target.hostname === cookie.domain || target.hostname.endsWith(`.${cookie.domain}`)
+    if (domainMatches && target.pathname.startsWith(cookie.path) && (!cookie.secure || target.protocol === 'https:')) matches.push(`${cookie.name}=${cookie.value}`)
+  }
+  return matches.join('; ')
+}
+
+function storeResponseCookies(response: Response, target: URL) {
+  const extended = response.headers as Headers & { getSetCookie?: () => string[] }
+  const values = extended.getSetCookie?.() ?? (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : [])
+  for (const value of values) {
+    const parts = value.split(';').map(part => part.trim())
+    const separator = parts[0].indexOf('=')
+    if (separator < 1) continue
+    const cookie: StoredCookie = { name: parts[0].slice(0, separator), value: parts[0].slice(separator + 1), domain: target.hostname, path: '/', secure: false, expires: null }
+    for (const attribute of parts.slice(1)) {
+      const [rawName, ...rest] = attribute.split('=')
+      const name = rawName.toLowerCase()
+      const attributeValue = rest.join('=')
+      if (name === 'domain') cookie.domain = attributeValue.replace(/^\./, '').toLowerCase()
+      else if (name === 'path') cookie.path = attributeValue || '/'
+      else if (name === 'secure') cookie.secure = true
+      else if (name === 'max-age') cookie.expires = Date.now() + Number(attributeValue) * 1000
+      else if (name === 'expires') cookie.expires = Number.isNaN(Date.parse(attributeValue)) ? null : Date.parse(attributeValue)
+    }
+    const key = `${cookie.name}|${cookie.domain}|${cookie.path}`
+    if (!cookie.value || (cookie.expires !== null && cookie.expires <= Date.now())) cookieJar.delete(key)
+    else cookieJar.set(key, cookie)
+  }
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason) }, { once: true })
+  })
+}
+
 const activate: Activate = (orca: OrcaWorkerApi) => {
   orca.panels.handle('request.send', async (raw, context) => {
     if (!isRequestInput(raw)) throw invalid('Invalid request payload.')
@@ -158,6 +231,9 @@ const activate: Activate = (orca: OrcaWorkerApi) => {
     controller?.abort(new Error('cancelled'))
     return { cancelled: Boolean(controller) }
   })
+
+  orca.panels.handle('cookies.status', () => ({ count: cookieJar.size }))
+  orca.panels.handle('cookies.clear', () => { const count = cookieJar.size; cookieJar.clear(); return { cleared: count } })
 }
 
 export default activate
