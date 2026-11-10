@@ -1,0 +1,17 @@
+# @name Health check
+GET https://httpbin.org/get?source=request-lab
+Accept: application/json
+
+### Create record
+POST https://httpbin.org/anything
+Content-Type: application/json
+X-Client: Request-Lab
+
+{
+  "name": "Orca",
+  "enabled": true
+}
+
+### Preview image
+GET https://httpbin.org/image/png
+Accept: image/png
