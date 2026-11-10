@@ -28,6 +28,6 @@ test('performs a local HTTP request and returns response metadata', async t => {
 test('rejects non-HTTP protocols', async () => {
   await assert.rejects(
     () => performRequest({ requestId: 'bad-url', method: 'GET', url: 'file:///secret' }),
-    /Chỉ hỗ trợ URL HTTP và HTTPS/
+    /Only HTTP and HTTPS URLs are supported/
   )
 })

@@ -70,16 +70,16 @@ async function readLimited(response: Response): Promise<{ bytes: Uint8Array; tru
 
 export async function performRequest(input: RequestInput, outerSignal?: AbortSignal) {
   const method = input.method.trim().toUpperCase()
-  if (!/^[A-Z]+$/.test(method)) throw invalid('Phương thức HTTP không hợp lệ.')
+  if (!/^[A-Z]+$/.test(method)) throw invalid('Invalid HTTP method.')
 
   let target: URL
   try {
     target = new URL(input.url)
   } catch {
-    throw invalid('URL không hợp lệ.')
+    throw invalid('Invalid URL.')
   }
   if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-    throw invalid('Chỉ hỗ trợ URL HTTP và HTTPS.')
+    throw invalid('Only HTTP and HTTPS URLs are supported.')
   }
 
   const controller = new AbortController()
@@ -134,9 +134,9 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
       cancelled,
       error: cancelled
         ? (controller.signal.reason instanceof Error && controller.signal.reason.message === 'timeout'
-          ? `Quá thời gian chờ ${timeoutMs} ms.`
-          : 'Yêu cầu đã bị hủy.')
-        : error instanceof Error ? error.message : 'Không thể gửi yêu cầu.'
+          ? `The request timed out after ${timeoutMs} ms.`
+          : 'The request was cancelled.')
+        : error instanceof Error ? error.message : 'The request could not be sent.'
     }
   } finally {
     clearTimeout(timeout)
@@ -147,13 +147,13 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
 
 const activate: Activate = (orca: OrcaWorkerApi) => {
   orca.panels.handle('request.send', async (raw, context) => {
-    if (!isRequestInput(raw)) throw invalid('Dữ liệu request không hợp lệ.')
+    if (!isRequestInput(raw)) throw invalid('Invalid request payload.')
     return performRequest(raw, context.signal)
   })
 
   orca.panels.handle('request.cancel', raw => {
     const requestId = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).requestId : undefined
-    if (typeof requestId !== 'string') throw invalid('Thiếu requestId.')
+    if (typeof requestId !== 'string') throw invalid('Missing requestId.')
     const controller = activeRequests.get(requestId)
     controller?.abort(new Error('cancelled'))
     return { cancelled: Boolean(controller) }

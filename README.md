@@ -1,46 +1,82 @@
 # Request Lab
 
-REST client gọn nhẹ cho Orca IDE. Plugin đọc file `.http` và `.rest`, gửi request trực tiếp từ máy của bạn và hiển thị status, thời gian, dung lượng, headers cùng response body.
+Request Lab is a focused HTTP workbench for Orca IDE. It reads `.http` and `.rest` files, sends requests directly from your machine, and presents status, timing, size, headers, and response bodies in a compact two-pane interface.
 
-## Tính năng v0.1.0
+## Features
 
-- Nhiều request trong một file, phân tách bằng `###`.
-- GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE và CONNECT.
-- Headers cùng raw/JSON body.
-- Gửi bằng nút hoặc `Ctrl+Enter`; hỗ trợ hủy và gửi lại.
-- Tự định dạng JSON/XML; xem text, ảnh và thông tin dữ liệu nhị phân.
-- Panel request nhanh và custom editor cho `.http`/`.rest`.
-- Request đi trực tiếp từ worker cục bộ, không qua máy chủ trung gian.
+- Multiple requests per file, separated with `###`.
+- GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE, and CONNECT.
+- Request headers and raw or JSON bodies.
+- Send with the button or `Ctrl+Enter`; cancel and resend without leaving the editor.
+- JSON and XML formatting, text rendering, image previews, and binary response metadata.
+- A quick-request panel and a custom editor for `.http` and `.rest` files.
+- Named environments with `{{variable}}` substitution.
+- Dynamic `{{$timestamp}}` and `{{$randomUUID}}` variables.
+- Encrypted Bearer, Basic, and API key credentials through Orca Secrets.
+- Local request history with status, duration, and replay.
+- cURL import for common `-X`, `-H`, `-d`, `--data-*`, and `--url` options.
+- No telemetry and no intermediary request service.
 
-## Cài đặt phát triển
+## Requirements
 
-1. Mở **Settings → Plugins → Development** trong Orca.
-2. Chọn **Add path** và trỏ tới thư mục plugin này.
-3. Duyệt quyền chạy trusted worker, sau đó bật plugin.
-4. Mở panel **Request Lab**, hoặc mở file `.http`/`.rest` rồi chọn editor **Request Lab**.
+- Orca IDE 1.4.255 or newer.
+- Approval to run the trusted worker used for direct HTTP and HTTPS requests.
 
-File mẫu nằm tại `examples/sample.http`.
+## Development installation
 
-## Cú pháp
+1. Open **Settings → Plugins → Development** in Orca.
+2. Select **Add path** and choose this repository folder.
+3. Review and approve the trusted-worker permission, then enable the plugin.
+4. Open the **Request Lab** panel, or open a `.http`/`.rest` file and select the **Request Lab** editor.
+
+## Request syntax
 
 ```http
 # @name Read item
-GET https://example.com/api/items/1
+GET {{baseUrl}}/api/items/1
 Accept: application/json
 
 ### Create item
-POST https://example.com/api/items
+POST {{baseUrl}}/api/items
 Content-Type: application/json
 
-{"name":"demo"}
+{
+  "name": "demo",
+  "requestId": "{{$randomUUID}}"
+}
 ```
 
-Response được giới hạn ở 768 KB để giữ giao diện ổn định. Phiên bản này chưa có environment variables, auth vault, history hoặc code generation; các phần đó thuộc giai đoạn tiếp theo.
+Create an environment named `Development`, add `baseUrl`, and Request Lab resolves the value immediately before sending. Missing variables stop the request and are listed in the UI.
 
-## Quyền riêng tư
+## Authentication
 
-Plugin không có telemetry. URL, headers và body chỉ được dùng để gửi request tới đích bạn nhập.
+Open **Auth** in the top toolbar and choose one of the following modes:
 
-## Tác giả
+- **Bearer token** adds an `Authorization: Bearer …` header.
+- **Basic auth** combines the configured username and password.
+- **API key** adds a configurable header or query parameter.
 
-Đỗ Hải Đăng
+Credential values are stored with Orca Secrets rather than regular plugin storage. Authentication is applied only when a request is sent and is not written into the `.http` file or request history.
+
+## cURL import
+
+Choose **Import cURL**, paste a command, and Request Lab converts it into `.http` syntax. Imported requests are appended to the current workbench and remain fully editable.
+
+## History
+
+The latest 30 requests are stored locally. History records the request name, method, template URL, response status, duration, and timestamp. It does not store generated authorization headers or encrypted credential values.
+
+## Limits and privacy
+
+Response bodies are capped at 768 KB to keep the editor responsive. Request Lab does not collect telemetry. URLs, headers, and bodies are used only to send requests to the destination you specify. Environment configuration and request history remain in Orca's plugin-local storage.
+
+## Testing
+
+```shell
+orca plugin check .
+orca plugin test .
+```
+
+## License
+
+MIT © 2026 Đỗ Hải Đăng

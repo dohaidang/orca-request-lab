@@ -36,9 +36,9 @@ function parseSection(text, separatorTitle) {
   if (match) {
     method = match[1].toUpperCase()
     url = match[2]
-    if (!METHODS.has(method)) error = `Phương thức ${method} chưa được hỗ trợ.`
+    if (!METHODS.has(method)) error = `Method ${method} is not supported.`
   } else if (!/^https?:\/\//i.test(requestLine)) {
-    error = 'Dòng request phải có dạng: METHOD https://example.com/path'
+    error = 'Use this request-line format: METHOD https://example.com/path'
   }
   cursor += 1
 
@@ -48,7 +48,7 @@ function parseSection(text, separatorTitle) {
     if (!line.trim().startsWith('#') && !line.trim().startsWith('//')) {
       const colon = line.indexOf(':')
       if (colon < 1) {
-        error ||= `Header không hợp lệ ở dòng: ${line.trim()}`
+        error ||= `Invalid header line: ${line.trim()}`
       } else {
         headers.push({ name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim() })
       }

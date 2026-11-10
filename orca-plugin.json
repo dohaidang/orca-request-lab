@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "request-lab",
   "name": "Request Lab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Send HTTP requests and inspect responses directly inside Orca.",
   "author": {
     "name": "Đỗ Hải Đăng"
