@@ -1,6 +1,6 @@
 import { formatBody, parseRequests } from './http-parser.js'
 import { applyAuth, evaluateAssertions, extractCaptures, generateCode, parseCurl, resolveRequest } from './request-tools.js'
-import { exportRunReport, importOpenApi } from './integration-tools.js'
+import { buildGraphqlRequest, exportRunReport, importOpenApi } from './integration-tools.js'
 
 const isEditor = document.documentElement.dataset.mode === 'editor'
 const sample = `# @name Read a sample post
@@ -35,7 +35,7 @@ const state = {
   session: null,
   environments: [defaultEnvironment],
   activeEnvironmentId: defaultEnvironment.id,
-  auth: { type: 'none', username: '', name: 'X-API-Key', placement: 'header', secret: '' },
+  auth: { type: 'none', username: '', name: 'X-API-Key', placement: 'header', tokenUrl: '', clientId: '', scope: '', audience: '', secret: '' },
   history: [],
   runResults: [],
   collectionRunning: false,
@@ -57,6 +57,7 @@ app.innerHTML = `
         <button class="tool-button" data-drawer="history" type="button">History <span id="history-count" class="count-badge">0</span></button>
         <button class="tool-button" data-drawer="curl" type="button">Import cURL</button>
         <button class="tool-button" data-drawer="openapi" type="button">OpenAPI</button>
+        <button class="tool-button" data-drawer="graphql" type="button">GraphQL</button>
         <button class="tool-button" data-drawer="code" type="button">Generate code</button>
         <button class="tool-button" data-drawer="network" type="button"><span id="network-indicator" class="tool-dot"></span>Network</button>
         <button id="run-all" class="button run-all" type="button"><span>▶▶</span> Run all</button>
@@ -163,7 +164,8 @@ function renderRequestMeta() {
   const invalid = Boolean(request.error || unresolved.length)
   elements.parseState.textContent = request.error ? 'CHECK' : unresolved.length ? `${unresolved.length} VAR` : 'VALID'
   elements.parseState.className = `parse-state${invalid ? ' warning' : ''}`
-  elements.parseState.title = unresolved.length ? `Missing: ${unresolved.join(', ')}` : ''
+  const runtimeInfo = [request.runtime.timeoutMs != null ? `timeout ${request.runtime.timeoutMs}ms` : '', request.runtime.retries != null ? `retries ${request.runtime.retries}` : '', request.runtime.cookies != null ? `cookies ${request.runtime.cookies ? 'on' : 'off'}` : ''].filter(Boolean).join(' · ')
+  elements.parseState.title = unresolved.length ? `Missing: ${unresolved.join(', ')}` : runtimeInfo
   elements.send.disabled = invalid || state.running
 }
 
@@ -207,10 +209,17 @@ async function executeTemplate(template) {
     url: request.url,
     headers: request.headers,
     body: request.body,
-      timeoutMs: Number(elements.timeout.value) * 1000,
-      cookieJar: state.preferences.cookieJar,
-      maxRetries: state.preferences.maxRetries
-  }, { timeoutMs: Math.min(310_000, Number(elements.timeout.value) * 1000 + 10_000) })
+      timeoutMs: template.runtime.timeoutMs ?? Number(elements.timeout.value) * 1000,
+      cookieJar: template.runtime.cookies ?? state.preferences.cookieJar,
+      maxRetries: template.runtime.retries ?? state.preferences.maxRetries,
+      oauth2: state.auth.type === 'oauth2' ? {
+        tokenUrl: state.auth.tokenUrl,
+        clientId: state.auth.clientId,
+        clientSecret: state.auth.secret,
+        scope: state.auth.scope,
+        audience: state.auth.audience
+      } : undefined
+    }, { timeoutMs: Math.min(310_000, (template.runtime.timeoutMs ?? Number(elements.timeout.value) * 1000) + 10_000) })
   const tests = result.ok ? evaluateAssertions(result, template.assertions) : []
   const captures = result.ok ? extractCaptures(result, template.captures) : []
   if (captures.some(capture => capture.ok)) await applyCapturedVariables(captures)
@@ -388,6 +397,7 @@ function renderDrawer() {
   else if (state.drawer === 'results') renderResultsDrawer()
   else if (state.drawer === 'openapi') renderOpenApiDrawer()
   else if (state.drawer === 'network') renderNetworkDrawer()
+  else if (state.drawer === 'graphql') renderGraphqlDrawer()
 }
 
 function renderEnvironmentDrawer() {
@@ -455,7 +465,7 @@ function renderAuthDrawer() {
   elements.drawerTitle.textContent = 'Authentication'
   elements.drawerContent.innerHTML = `
     <p class="drawer-lead">Credentials are encrypted by Orca Secrets and never written into request history.</p>
-    <label class="form-label">Auth type<select id="auth-type" class="field"><option value="none">None</option><option value="bearer">Bearer token</option><option value="basic">Basic auth</option><option value="api-key">API key</option></select></label>
+    <label class="form-label">Auth type<select id="auth-type" class="field"><option value="none">None</option><option value="bearer">Bearer token</option><option value="basic">Basic auth</option><option value="api-key">API key</option><option value="oauth2">OAuth 2.0 Client Credentials</option></select></label>
     <div id="auth-fields"></div>
     <button id="auth-save" class="button primary drawer-primary" type="button">Save authentication</button>`
   const select = document.querySelector('#auth-type')
@@ -468,11 +478,12 @@ function renderAuthDrawer() {
 function renderAuthFields() {
   const container = document.querySelector('#auth-fields')
   if (!container) return
-  const secretLabel = state.auth.type === 'basic' ? 'Password' : state.auth.type === 'api-key' ? 'API key value' : 'Token'
+  const secretLabel = state.auth.type === 'basic' ? 'Password' : state.auth.type === 'api-key' ? 'API key value' : state.auth.type === 'oauth2' ? 'Client secret' : 'Token'
   if (state.auth.type === 'none') container.innerHTML = '<div class="quiet-block">No authentication will be added.</div>'
   else container.innerHTML = `
     ${state.auth.type === 'basic' ? `<label class="form-label">Username<input id="auth-username" class="field" value="${escapeText(state.auth.username)}" autocomplete="off"></label>` : ''}
     ${state.auth.type === 'api-key' ? `<label class="form-label">Key name<input id="auth-name" class="field" value="${escapeText(state.auth.name)}" placeholder="X-API-Key"></label><label class="form-label">Placement<select id="auth-placement" class="field"><option value="header">Header</option><option value="query">Query parameter</option></select></label>` : ''}
+    ${state.auth.type === 'oauth2' ? `<label class="form-label">Token URL<input id="auth-token-url" class="field" value="${escapeText(state.auth.tokenUrl)}" placeholder="https://identity.example.com/oauth/token"></label><label class="form-label">Client ID<input id="auth-client-id" class="field" value="${escapeText(state.auth.clientId)}" autocomplete="off"></label><label class="form-label">Scope<input id="auth-scope" class="field" value="${escapeText(state.auth.scope)}" placeholder="read write"></label><label class="form-label">Audience (optional)<input id="auth-audience" class="field" value="${escapeText(state.auth.audience)}"></label>` : ''}
     <label class="form-label">${secretLabel}<input id="auth-secret" class="field" type="password" value="${escapeText(state.auth.secret)}" autocomplete="new-password"></label>`
   if (state.auth.type === 'api-key') document.querySelector('#auth-placement').value = state.auth.placement
 }
@@ -483,9 +494,17 @@ async function saveAuth() {
     type,
     username: document.querySelector('#auth-username')?.value ?? '',
     name: document.querySelector('#auth-name')?.value.trim() || 'X-API-Key',
-    placement: document.querySelector('#auth-placement')?.value ?? 'header'
+    placement: document.querySelector('#auth-placement')?.value ?? 'header',
+    tokenUrl: document.querySelector('#auth-token-url')?.value.trim() ?? '',
+    clientId: document.querySelector('#auth-client-id')?.value.trim() ?? '',
+    scope: document.querySelector('#auth-scope')?.value.trim() ?? '',
+    audience: document.querySelector('#auth-audience')?.value.trim() ?? ''
   }
   const secret = document.querySelector('#auth-secret')?.value ?? ''
+  if (type === 'oauth2' && (!metadata.tokenUrl || !metadata.clientId || !secret)) {
+    showToast('OAuth token URL, client ID, and client secret are required.')
+    return
+  }
   try {
     if (type === 'none') await orca.secrets.delete('auth-secret')
     else await orca.secrets.set('auth-secret', secret)
@@ -571,6 +590,30 @@ function renderOpenApiDrawer() {
     } catch (error) { showToast(error instanceof Error ? error.message : 'OpenAPI import failed.') }
   })
   document.querySelector('#openapi-input').focus()
+}
+
+function renderGraphqlDrawer() {
+  elements.drawerTitle.textContent = 'GraphQL builder'
+  elements.drawerContent.innerHTML = `
+    <p class="drawer-lead">Build a standard GraphQL-over-HTTP request with JSON variables and response assertions.</p>
+    <label class="form-label">Endpoint<input id="graphql-endpoint" class="field" value="https://api.example.com/graphql"></label>
+    <label class="form-label">Operation name<input id="graphql-operation" class="field" placeholder="ReadUser"></label>
+    <label class="form-label">Query<textarea id="graphql-query" class="field graphql-query" spellcheck="false" placeholder="query ReadUser($id: ID!) {\n  user(id: $id) { id name }\n}"></textarea></label>
+    <label class="form-label">Variables JSON<textarea id="graphql-variables" class="field graphql-variables" spellcheck="false" placeholder="{&quot;id&quot;:&quot;7&quot;}"></textarea></label>
+    <button id="graphql-build" class="button primary drawer-primary" type="button">Append GraphQL request</button>`
+  document.querySelector('#graphql-build').addEventListener('click', () => {
+    try {
+      const converted = buildGraphqlRequest({ endpoint: document.querySelector('#graphql-endpoint').value.trim(), operationName: document.querySelector('#graphql-operation').value.trim(), query: document.querySelector('#graphql-query').value, variables: document.querySelector('#graphql-variables').value })
+      elements.source.value = `${elements.source.value.trim()}\n\n### GraphQL\n${converted}`
+      elements.source.dispatchEvent(new Event('input'))
+      state.selected = state.requests.length - 1
+      renderTabs()
+      renderRequestMeta()
+      closeDrawer()
+      showToast('GraphQL request added to the workbench.')
+    } catch (error) { showToast(error instanceof Error ? error.message : 'GraphQL request could not be built.') }
+  })
+  document.querySelector('#graphql-query').focus()
 }
 
 function renderNetworkDrawer() {

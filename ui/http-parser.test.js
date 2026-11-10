@@ -41,3 +41,11 @@ POST https://example.com/session`)
   assert.deepEqual(request.captures, [{ name: 'accessToken', path: '$.token' }])
   assert.equal(request.assertions[0].expected, 201)
 })
+
+test('parses per-request runtime directives', () => {
+  const [request] = parseRequests(`# @timeout 5s
+# @retry 2
+# @cookies off
+GET https://example.com`)
+  assert.deepEqual(request.runtime, { timeoutMs: 5000, retries: 2, cookies: false })
+})

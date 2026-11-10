@@ -23,6 +23,9 @@ Request Lab is a focused HTTP workbench for Orca IDE. It reads `.http` and `.res
 - In-memory session cookie jar with domain, path, expiry, and secure-cookie handling.
 - Configurable retries for idempotent requests and transient HTTP failures.
 - Collection report export as JSON or JUnit XML.
+- OAuth 2.0 Client Credentials with encrypted secrets and in-memory token caching.
+- GraphQL-over-HTTP request builder with JSON variables.
+- Per-request timeout, retry, and cookie directives.
 - No telemetry and no intermediary request service.
 
 ## Requirements
@@ -63,8 +66,11 @@ Open **Auth** in the top toolbar and choose one of the following modes:
 - **Bearer token** adds an `Authorization: Bearer …` header.
 - **Basic auth** combines the configured username and password.
 - **API key** adds a configurable header or query parameter.
+- **OAuth 2.0 Client Credentials** obtains and caches an access token from the configured token endpoint.
 
 Credential values are stored with Orca Secrets rather than regular plugin storage. Authentication is applied only when a request is sent and is not written into the `.http` file or request history.
+
+OAuth client secrets use HTTP Basic authentication when requesting a token. Tokens are cached only in worker memory and refreshed before expiry. Token endpoint URLs must use HTTP or HTTPS.
 
 ## cURL import
 
@@ -115,6 +121,25 @@ Choose **Generate code** for the selected request and switch between cURL, JavaS
 Choose **OpenAPI**, paste an OpenAPI 3.x JSON document, and build a collection. Request Lab imports every supported path operation, converts path and required query parameters into `{{variables}}`, creates request body examples from schemas, and adds an assertion for explicit `2xx` responses.
 
 The importer intentionally accepts JSON only. YAML documents should be converted to JSON before import.
+
+## GraphQL builder
+
+Choose **GraphQL** and provide an endpoint, query or mutation, optional operation name, and JSON variables. Request Lab creates a standard POST request with `Content-Type: application/json` plus status and `$.data` assertions. The generated request remains ordinary `.http` text and works with environments, authentication, capture, and collection runs.
+
+## Per-request runtime directives
+
+Place runtime overrides before a request line:
+
+```http
+# @timeout 5s
+# @retry 2
+# @cookies off
+GET {{baseUrl}}/health
+```
+
+- `# @timeout 5000` uses milliseconds; `# @timeout 5s` uses seconds.
+- `# @retry 0` through `# @retry 3` overrides the global retry policy.
+- `# @cookies on` or `# @cookies off` overrides the session cookie jar for that request.
 
 ## Network runtime
 

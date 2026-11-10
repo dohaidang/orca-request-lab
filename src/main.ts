@@ -1,6 +1,7 @@
 import type { Activate, OrcaWorkerApi } from 'orca/worker'
 
 type HeaderPair = { name: string; value: string }
+type OAuth2Config = { tokenUrl: string; clientId: string; clientSecret: string; scope?: string; audience?: string }
 type RequestInput = {
   requestId: string
   method: string
@@ -10,6 +11,7 @@ type RequestInput = {
   timeoutMs?: number
   cookieJar?: boolean
   maxRetries?: number
+  oauth2?: OAuth2Config
 }
 
 type StoredCookie = { name: string; value: string; domain: string; path: string; secure: boolean; expires: number | null }
@@ -19,6 +21,7 @@ const activeRequests = new Map<string, AbortController>()
 const cookieJar = new Map<string, StoredCookie>()
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
 const RETRYABLE_METHOD = new Set(['GET', 'HEAD', 'PUT', 'DELETE', 'OPTIONS'])
+const oauthTokenCache = new Map<string, { token: string; expiresAt: number }>()
 
 function invalid(message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code: 'invalid_params' })
@@ -107,6 +110,9 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
   let attempts = 0
 
   try {
+    if (input.oauth2 && !headers.has('authorization')) {
+      headers.set('authorization', `Bearer ${await getOAuthToken(input.oauth2, controller.signal)}`)
+    }
     let response: Response | undefined
     let lastError: unknown
     while (attempts <= maxRetries) {
@@ -174,6 +180,33 @@ export async function performRequest(input: RequestInput, outerSignal?: AbortSig
     outerSignal?.removeEventListener('abort', abortFromOuter)
     activeRequests.delete(input.requestId)
   }
+}
+
+async function getOAuthToken(config: OAuth2Config, signal: AbortSignal): Promise<string> {
+  let tokenTarget: URL
+  try { tokenTarget = new URL(config.tokenUrl) } catch { throw invalid('Invalid OAuth token URL.') }
+  if (!['http:', 'https:'].includes(tokenTarget.protocol)) throw invalid('OAuth token URL must use HTTP or HTTPS.')
+  if (!config.clientId || !config.clientSecret) throw invalid('OAuth client ID and client secret are required.')
+  const cacheKey = `${tokenTarget.toString()}|${config.clientId}|${config.scope ?? ''}|${config.audience ?? ''}`
+  const cached = oauthTokenCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now() + 30_000) return cached.token
+
+  const body = new URLSearchParams({ grant_type: 'client_credentials' })
+  if (config.scope) body.set('scope', config.scope)
+  if (config.audience) body.set('audience', config.audience)
+  const authorization = Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')
+  const response = await fetch(tokenTarget, {
+    method: 'POST',
+    headers: { authorization: `Basic ${authorization}`, 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body,
+    signal
+  })
+  if (!response.ok) throw new Error(`OAuth token endpoint returned ${response.status}.`)
+  const payload = await response.json() as { access_token?: unknown; expires_in?: unknown }
+  if (typeof payload.access_token !== 'string' || !payload.access_token) throw new Error('OAuth token response has no access_token.')
+  const expiresIn = Math.max(Number(payload.expires_in) || 3600, 60)
+  oauthTokenCache.set(cacheKey, { token: payload.access_token, expiresAt: Date.now() + expiresIn * 1000 })
+  return payload.access_token
 }
 
 function cookieHeader(target: URL): string {

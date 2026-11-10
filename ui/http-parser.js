@@ -20,6 +20,7 @@ function parseSection(text, separatorTitle) {
   let name = separatorTitle
   const assertions = []
   const captures = []
+  const runtime = { timeoutMs: null, retries: null, cookies: null }
 
   while (cursor < lines.length) {
     const line = lines[cursor].trim()
@@ -32,6 +33,12 @@ function parseSection(text, separatorTitle) {
     }
     const captured = line.match(/^#\s*@capture\s+([A-Za-z_][\w.-]*)\s+(\$[^\s]*)$/i)
     if (captured) captures.push({ name: captured[1], path: captured[2] })
+    const timeout = line.match(/^#\s*@timeout\s+(\d+)(ms|s)?$/i)
+    if (timeout) runtime.timeoutMs = Number(timeout[1]) * (timeout[2]?.toLowerCase() === 's' ? 1000 : 1)
+    const retries = line.match(/^#\s*@retry\s+([0-3])$/i)
+    if (retries) runtime.retries = Number(retries[1])
+    const cookies = line.match(/^#\s*@cookies\s+(on|off)$/i)
+    if (cookies) runtime.cookies = cookies[1].toLowerCase() === 'on'
     if (line && !line.startsWith('#') && !line.startsWith('//')) break
     cursor += 1
   }
@@ -76,6 +83,7 @@ function parseSection(text, separatorTitle) {
     body,
     assertions,
     captures,
+    runtime,
     error
   }
 }

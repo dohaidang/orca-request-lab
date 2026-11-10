@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { exportRunReport, importOpenApi } from './integration-tools.js'
+import { buildGraphqlRequest, exportRunReport, importOpenApi } from './integration-tools.js'
 
 test('imports OpenAPI operations as HTTP requests', () => {
   const source = JSON.stringify({
@@ -23,4 +23,11 @@ test('exports JSON and JUnit collection reports', () => {
   const results = [{ name: 'Health <check>', passed: true, status: 200, elapsedMs: 12, tests: [], captures: [] }]
   assert.equal(JSON.parse(exportRunReport(results, 'json', { generatedAt: 0 })).summary.passed, 1)
   assert.match(exportRunReport(results, 'junit', { generatedAt: 0 }), /name="Health &lt;check&gt;"/)
+})
+
+test('builds a GraphQL HTTP request', () => {
+  const output = buildGraphqlRequest({ endpoint: 'https://api.example.com/graphql', operationName: 'ReadUser', query: 'query ReadUser($id: ID!) { user(id: $id) { id } }', variables: '{"id":"7"}' })
+  assert.match(output, /# @name ReadUser/)
+  assert.match(output, /POST https:\/\/api\.example\.com\/graphql/)
+  assert.match(output, /"id": "7"/)
 })

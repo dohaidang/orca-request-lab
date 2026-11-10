@@ -157,6 +157,8 @@ kbd { border: 1px solid var(--line-strong); border-bottom-width: 2px; border-rad
 .quiet-block { display: grid; place-items: center; min-height: 90px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 10px; text-align: center; }
 .curl-input { min-height: 190px; resize: vertical; white-space: pre; }
 .openapi-input { min-height: 340px; resize: vertical; white-space: pre; }
+.graphql-query { min-height: 190px; resize: vertical; white-space: pre; }
+.graphql-variables { min-height: 90px; resize: vertical; white-space: pre; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .switch-row > span { display: grid; gap: 4px; }
 .switch-row strong { font-size: 10px; }

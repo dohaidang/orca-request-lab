@@ -64,3 +64,28 @@ test('keeps cookies in the in-memory cookie jar', async t => {
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.body, 'session=abc')
 })
+
+test('gets and caches OAuth client-credentials tokens', async t => {
+  let tokenRequests = 0
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json')
+    if (request.url === '/token') {
+      tokenRequests += 1
+      response.end(JSON.stringify({ access_token: 'test-token', expires_in: 3600 }))
+      return
+    }
+    response.statusCode = request.headers.authorization === 'Bearer test-token' ? 200 : 401
+    response.end(JSON.stringify({ authorized: response.statusCode === 200 }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Missing server address')
+  const base = `http://127.0.0.1:${address.port}`
+  const oauth2 = { tokenUrl: `${base}/token`, clientId: 'client', clientSecret: 'secret' }
+  const first = await performRequest({ requestId: 'oauth-one', method: 'GET', url: `${base}/resource`, oauth2 })
+  const second = await performRequest({ requestId: 'oauth-two', method: 'GET', url: `${base}/resource`, oauth2 })
+  assert.equal(first.ok && first.status, 200)
+  assert.equal(second.ok && second.status, 200)
+  assert.equal(tokenRequests, 1)
+})

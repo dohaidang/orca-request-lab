@@ -1,6 +1,8 @@
 # @name Health check
 # @expect status 200
 # @expect header content-type contains application/json
+# @timeout 5s
+# @retry 2
 GET {{baseUrl}}/get?source=request-lab
 Accept: application/json
 

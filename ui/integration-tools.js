@@ -64,6 +64,19 @@ export function exportRunReport(results, format, metadata = {}) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="Request Lab" tests="${results.length}" failures="${failures}" time="${duration.toFixed(3)}" timestamp="${generatedAt}">${cases}</testsuite>\n`
 }
 
+export function buildGraphqlRequest({ endpoint, operationName = '', query, variables = '' }) {
+  if (!/^https?:\/\//i.test(endpoint)) throw new Error('GraphQL endpoint must be an HTTP or HTTPS URL.')
+  if (!String(query).trim()) throw new Error('GraphQL query is required.')
+  let parsedVariables = {}
+  if (String(variables).trim()) {
+    try { parsedVariables = JSON.parse(variables) } catch { throw new Error('GraphQL variables must be valid JSON.') }
+  }
+  const body = { query: String(query).trim(), variables: parsedVariables }
+  if (operationName.trim()) body.operationName = operationName.trim()
+  const name = operationName.trim() || String(query).match(/\b(query|mutation|subscription)\s+([A-Za-z_]\w*)/)?.[2] || 'GraphQL request'
+  return `# @name ${name}\n# @expect status 200\n# @expect json $.data exists\nPOST ${endpoint}\nContent-Type: application/json\nAccept: application/json\n\n${JSON.stringify(body, null, 2)}`
+}
+
 function summarize(results) {
   return { total: results.length, passed: results.filter(result => result.passed).length, failed: results.filter(result => !result.passed).length, durationMs: Math.round(results.reduce((sum, result) => sum + (result.elapsedMs ?? 0), 0) * 10) / 10 }
 }
